@@ -10,34 +10,40 @@ export async function GET(request: Request, { params }: { params: { path: string
     if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
     const filePathParam = params.path.join("/");
-    // Prevent path traversal
-    const safePath = path.basename(filePathParam);
-    // Actually we stored relative path as "timestamp-filename" in service, so it should be just a filename usually.
-    // But wait, in service I did: const filePath = path.join(uploadDir, uniqueName);
-    // And returned: filePath: uniqueName. 
-    // So the "path" param here should be the uniqueName.
+    const safePath = filePathParam.split("/").pop(); // uniqueName is just the filename now
 
-    if (!safePath || safePath !== filePathParam) {
+    if (!safePath) {
         return NextResponse.json({ error: "Invalid path" }, { status: 400 });
     }
 
-    const absolutePath = path.join(process.cwd(), "storage", "uploads", safePath);
+    const { createClient } = require("@supabase/supabase-js");
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
+    const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
+
+    if (!supabaseUrl || !supabaseKey) {
+        return NextResponse.json({ error: "Supabase credentials not configured." }, { status: 500 });
+    }
+    const supabase = createClient(supabaseUrl, supabaseKey);
 
     try {
-        const fileBuffer = await fs.readFile(absolutePath);
-        const mimeType = mime.getType(absolutePath) || "application/octet-stream";
+        const { data, error } = await supabase.storage.from("documents").download(safePath);
+
+        if (error || !data) {
+            throw new Error(error?.message || "File not found");
+        }
+
+        const fileBuffer = Buffer.from(await data.arrayBuffer());
+        const mimeType = "application/octet-stream"; // or derive from name
 
         return new NextResponse(fileBuffer, {
             headers: {
                 "Content-Type": mimeType,
-                "Content-Disposition": `attachment; filename="${safePath}"`, // Should really use original name, but we don't have it here easily easily without looking up DB. For now, serve as is or use ID mapping.
-                // Actually, in the UI we will have the original name. The download link could be just a proxy.
-                // Let's rely on the browser to handle the filename if we can, or just serve it.
+                "Content-Disposition": `attachment; filename="${safePath}"`,
             }
         });
 
     } catch (error) {
-        console.error("File read error:", error);
+        console.error("File download error:", error);
         return NextResponse.json({ error: "File not found" }, { status: 404 });
     }
 }

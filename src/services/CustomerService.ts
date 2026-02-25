@@ -178,8 +178,15 @@ export class CustomerService {
 
     async saveFile(file: File): Promise<{ fileName: string; filePath: string; fileType: string; fileSize: number }> {
         const buffer = Buffer.from(await file.arrayBuffer());
-        const uploadDir = path.join(process.cwd(), "storage", "uploads");
-        await fs.mkdir(uploadDir, { recursive: true });
+
+        const { createClient } = require("@supabase/supabase-js");
+        const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
+        const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
+
+        if (!supabaseUrl || !supabaseKey) {
+            throw new Error("Supabase Storage credentials not configured in environment variables.");
+        }
+        const supabase = createClient(supabaseUrl, supabaseKey);
 
         const allowedTypes = [
             'application/pdf', 'image/jpeg', 'image/png', 'image/gif',
@@ -192,14 +199,23 @@ export class CustomerService {
             throw new Error(`File type ${file.type || 'unknown'} is not allowed.`);
         }
 
-        const safeFileName = path.basename(file.name).replace(/[^a-zA-Z0-9.-]/g, "_");
+        const safeFileName = file.name.replace(/[^a-zA-Z0-9.-]/g, "_");
         const uniqueName = `${Date.now()}-${safeFileName}`;
-        const filePath = path.join(uploadDir, uniqueName);
-        await fs.writeFile(filePath, buffer);
+
+        const { data, error } = await supabase.storage
+            .from('documents')
+            .upload(uniqueName, buffer, {
+                contentType: file.type,
+                upsert: false
+            });
+
+        if (error) {
+            throw new Error("Failed to upload to Supabase: " + error.message);
+        }
 
         return {
-            fileName: path.basename(file.name),
-            filePath: uniqueName, // Store relative filename
+            fileName: file.name,
+            filePath: uniqueName, // Store relative filename for DB
             fileType: file.type,
             fileSize: file.size
         };
